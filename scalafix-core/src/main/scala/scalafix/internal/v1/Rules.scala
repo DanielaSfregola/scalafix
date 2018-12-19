@@ -1,7 +1,9 @@
 package scalafix.internal.v1
 
 import java.util.ServiceLoader
+
 import metaconfig.Configured
+
 import scala.meta.tokens.Tokens
 import scalafix.internal.config.MetaconfigOps
 import scalafix.internal.patch.PatchInternals
@@ -10,27 +12,32 @@ import scalafix.lint.Diagnostic
 import scalafix.lint.RuleDiagnostic
 import scalafix.patch.Patch
 import scalafix.rule.RuleName
-import scalafix.v1.Configuration
-import scalafix.v1.Rule
-import scalafix.v1.SemanticDocument
-import scalafix.v1.SemanticRule
-import scalafix.v1.SyntacticDocument
-import scalafix.v1.SyntacticRule
+import scalafix.v1.{Configuration, LifecycleAwareRule, Rule, SemanticAnalysisRule, SemanticDocument, SemanticRule, SyntacticDocument, SyntacticRule}
 
 case class Rules(rules: List[Rule] = Nil) {
 
   def name: RuleName = RuleName(rules.flatMap(_.name.identifiers))
   def isEmpty: Boolean = rules.isEmpty
-  def isSemantic: Boolean = semanticRules.nonEmpty
+  def   isSemantic: Boolean = semanticRules.nonEmpty
   def withConfiguration(config: Configuration): Configured[Rules] =
     MetaconfigOps
       .traverse(rules.map(_.withConfiguration(config)))
       .map(Rules(_))
+
   def semanticRules: List[SemanticRule] = rules.collect {
     case s: SemanticRule => s
   }
+
   def syntacticRules: List[SyntacticRule] = rules.collect {
     case s: SyntacticRule => s
+  }
+
+  def lifecycleRules: List[LifecycleAwareRule] = rules.collect {
+    case r: LifecycleAwareRule => r
+  }
+
+  def analysisRules: List[SemanticAnalysisRule] = rules.collect {
+    case r: SemanticAnalysisRule => r
   }
 
   def addSuppression(
@@ -57,6 +64,19 @@ case class Rules(rules: List[Rule] = Nil) {
         rule.name -> rule.fix(sdoc.internal.doc)
     }.toMap
     PatchInternals.semantic(fixes, sdoc, suppress)
+  }
+
+  def semanticAnalysis(
+    sdoc: SemanticDocument,
+    suppress: Boolean
+  ): List[RuleDiagnostic] = {
+    rules.foreach {
+      case rule: SemanticAnalysisRule =>
+        rule.analyse(sdoc)
+      case _ =>
+        // ignore non-analysis rules
+    }
+    List.empty // not sure what to return here
   }
 
   def syntacticPatch(

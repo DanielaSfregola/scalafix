@@ -233,6 +233,60 @@ object MainOps {
     }
   }
 
+  def unsafeAnalyseFile(args: ValidatedArgs, file: AbsolutePath): ExitStatus = {
+    val input = args.input(file)
+    val tree = LazyValue.later { () =>
+      args.parse(input).get: Tree
+    }
+    val doc = SyntacticDocument(input, tree, args.diffDisable, args.config)
+    val messages = {
+      val relpath = file.toRelative(args.sourceroot)
+      val sdoc = SemanticDocument.fromPath(
+        doc,
+        relpath,
+        args.classLoader,
+        args.symtab
+      )
+      val messages =
+        args.rules.semanticAnalysis(sdoc, args.args.autoSuppressLinterErrors)
+      messages
+    }
+
+    if (!args.args.autoSuppressLinterErrors) {
+      messages.foreach { diag =>
+        args.config.reporter.lint(diag)
+      }
+    }
+
+    ExitStatus.Ok
+  }
+
+  def analyseFile(args: ValidatedArgs, file: AbsolutePath): ExitStatus = {
+    try {
+      PlatformTokenizerCache.megaCache.clear()
+      unsafeAnalyseFile(args, file)
+    } catch {
+      case e: ParseException =>
+        args.config.reporter.error(e.shortMessage, e.pos)
+        ExitStatus.ParseError
+      case e: SemanticDocument.Error.MissingSemanticdb =>
+        args.config.reporter.error(e.getMessage)
+        ExitStatus.MissingSemanticdbError
+      case e: StaleSemanticDB =>
+        if (args.args.noStaleSemanticdb) ExitStatus.Ok
+        else {
+          args.config.reporter.error(e.getMessage)
+          ExitStatus.StaleSemanticdbError
+        }
+      case NonFatal(e) =>
+        val ex = FileException(file, e)
+        trimStackTrace(ex, untilMethod = "handleFile")
+        ex.printStackTrace(args.args.out)
+        ExitStatus.UnexpectedError
+    }
+  }
+
+
   def handleFile(args: ValidatedArgs, file: AbsolutePath): ExitStatus = {
     try {
       PlatformTokenizerCache.megaCache.clear()
@@ -264,6 +318,26 @@ object MainOps {
     val N = files.length
     val width = N.toString.length
     var exit = ExitStatus.Ok
+
+    val lifecycleRules = args.rules.lifecycleRules
+    lifecycleRules.foreach(_.beforeStart())
+
+    val analysisRules = args.rules.analysisRules
+    if(analysisRules.nonEmpty) {
+
+      files.foreach { file =>
+        if (args.args.verbose) {
+          val message = s"Analysing (%${width}s/%s) %s".format(i, N, file)
+          args.config.reporter.info(message)
+          i += 1
+        }
+        analyseFile(args, file)
+      }
+      analysisRules.foreach(_.afterAnalysis())
+    }
+
+
+    // rules start notification
     files.foreach { file =>
       if (args.args.verbose) {
         val message = s"Processing (%${width}s/%s) %s".format(i, N, file)
@@ -273,6 +347,8 @@ object MainOps {
       val next = handleFile(args, file)
       exit = ExitStatus.merge(exit, next)
     }
+    lifecycleRules.foreach(_.beforeStart())
+    // rules end notification
     adjustExitCode(args, exit, files)
   }
 

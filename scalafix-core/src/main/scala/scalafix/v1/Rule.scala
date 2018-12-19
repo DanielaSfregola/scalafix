@@ -44,6 +44,31 @@ abstract class SemanticRule(name: RuleName) extends Rule(name) {
   def fix(implicit doc: SemanticDocument): Patch = Patch.empty
 }
 
+trait SemanticAnalysisRule { this: LifecycleAwareRule =>
+
+  /**
+   * Called for each document before semantic rule is run.
+   */
+  def analyse(implicit doc: SemanticDocument): Unit
+
+  /**
+   * Called once each document has been passed to analysis
+   */
+  def afterAnalysis(): Unit
+}
+
+trait LifecycleAwareRule { this: Rule =>
+  /**
+   * Called before the rule starts processing documents
+   */
+  def beforeStart(): Unit
+
+  /**
+    * Called after all documents have been processed
+    */
+  def afterComplete(): Unit
+}
+
 object SemanticRule {
   def constant(name: RuleName, patch: Patch): SemanticRule =
     new SemanticRule(name) {
